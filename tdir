@@ -1,106 +1,98 @@
 #!/usr/bin/env bash
-# =============================================================================
-# tdir - Smart Tagged Directory Creator & Searcher (macOS)
-# Fixed & Improved version - May 2025
-#
-# USAGE:
-#   ./tdir <folder-name> [tag1 tag2 ...]          # create + tag
-#   ./tdir create <folder-name> [tag1 tag2 ...]
-#   ./tdir search <tag1> [tag2 ...]
-#   ./tdir list-tags [folder-path]
-#   ./tdir help
-# =============================================================================
 
-set -euo pipefail
+set -euo pipefail   # Strict mode: exit on error, undefined vars, pipe failures
 
-# ===================== CONFIGURATION =====================
-TAG_FILE=".tags"                    # Hidden file that stores tags (one per line)
-SEARCH_DEPTH=5                      # How deep to search (increase if you have deep folders)
+# CONFIGURATION 
+TAG_FILE=".tags"          # File that stores one tag per line
+SEARCH_DEPTH=6            # How deep to search recursively
 
-# ===================== HELPER FUNCTIONS =====================
+# HELPER FUNCTIONS 
 
-# Print usage and exit
+# 1. Show usage when user does something wrong
 usage() {
     cat <<EOF
 Usage:
-  tdir <folder-name> [tag1 tag2 ...]     # Create folder and add tags
+  tdir <folder-name> [tag1 tag2 tag3 ...]          # Create folder + tags
   tdir create <folder-name> [tag1 tag2 ...]
-  tdir search <tag1> [tag2 ...]          # Find folders by tags
-  tdir list-tags [path]                  # Show tags of a folder (default: current)
+  tdir search <tag1> [tag2 ...]                    # Search folders by tags
+  tdir list-tags [path]                            # Show tags of a folder
   tdir help
 EOF
     exit 1
 }
 
-# Save tags to .tags file inside the folder (one tag per line, sorted, unique)
+# 2. Save tags to .tags file inside the folder
+# Input:  $1 = directory path, $2... = list of tags
+# Output: Creates/updates .tags file with unique sorted tags (one per line)
+# Prints confirmation to stdout
 save_tags() {
-    local dir="$1"
-    shift
-    local tags=("$@")
+    local dir="$1"          # First argument = target directory
+    shift                   # Remove first argument so "$@" now contains only tags
+    local tags=("$@")       # Store remaining arguments as array
 
     if [[ ${#tags[@]} -eq 0 ]]; then
-        return 0
+        return 0            # No tags provided → do nothing
     fi
 
-    # Write tags (one per line) → sorted and deduplicated
+    # Write tags (one per line), remove duplicates, sort them
     printf "%s\n" "${tags[@]}" | sort -u > "${dir}/${TAG_FILE}"
-    echo "✓ Tags saved: ${tags[*]}" >&2
+    
+    # Inform user what was saved
+    echo "✓ Tags saved: ${tags[*]}"
 }
 
-# Read tags from a folder's .tags file
+# 3. Read tags from a folder's .tags file
+# Input:  $1 = directory path
+# Output: Prints tags (one per line) or nothing if file doesn't exist
 get_tags() {
     local dir="$1"
     if [[ -f "${dir}/${TAG_FILE}" ]]; then
         cat "${dir}/${TAG_FILE}"
-    else
-        echo ""   # no tags
     fi
 }
 
-# ===================== MAIN LOGIC =====================
+# MAIN LOGIC
+
 main() {
+    # If no arguments at all → show usage
     if [[ $# -eq 0 ]]; then
         usage
     fi
 
-    local cmd="${1:-}"
-    shift || true   # safely remove first argument
+    local cmd="$1"          # First word user typed (command or folder name)
+    shift                   # Remove first argument so "$@" now contains the rest
 
     case "$cmd" in
-        create|"" )
-            # ------------------- CREATE MODE -------------------
-            if [[ $# -eq 0 ]]; then
-                usage
-            fi
+        # CREATE MODE
+        create)
+            if [[ $# -eq 0 ]]; then usage; fi
+            
+            local folder_name="$1"   # Next argument = name of folder to create
+            shift                    # Remaining arguments = tags
 
-            local folder_name="$1"
-            shift
-
-            # Create the directory (and parents if needed)
+            # Create the directory
             mkdir -p "$folder_name"
-            echo "✓ Directory created: $(pwd)/$folder_name"
+            echo "✓ Directory created: $(realpath "$folder_name")"
 
-            # Save tags if any were given
-            if [[ $# -gt 0 ]]; then
-                save_tags "$folder_name" "$@"
-            fi
+            # Save any tags that were provided
+            save_tags "$folder_name" "$@"
             ;;
 
-        search )
-            # ------------------- SEARCH MODE -------------------
+        # SEARCH MODE 
+        search)
             if [[ $# -eq 0 ]]; then
                 echo "Error: Provide at least one tag to search" >&2
                 usage
             fi
 
-            echo "🔎 Searching for folders matching tags: $*" >&2
-            echo "────────────────────────────────────────"
-
-            # Find all .tags files, then check if they contain any of the requested tags
+            echo "Tags: $*"
+            # Find every .tags file within SEARCH_DEPTH
+            # For each .tags file, check if ANY of the search tags exist inside it
             find . -maxdepth "$SEARCH_DEPTH" -name "$TAG_FILE" -type f 2>/dev/null | while read -r tagfile; do
-                local folder="${tagfile%/*}"          # remove /filename → get folder path
+                local folder="${tagfile%/*}"          # Get folder path (remove /${TAG_FILE})
                 local matched=false
 
+                # Check each search tag against the .tags file
                 for tag in "$@"; do
                     if grep -qixF "$tag" "$tagfile"; then
                         matched=true
@@ -108,50 +100,45 @@ main() {
                     fi
                 done
 
+                # If at least one tag matched, print the folder
                 if [[ "$matched" == true ]]; then
                     local tags=$(get_tags "$folder" | tr '\n' ' ' | xargs)
-                    printf "📁 %s   [ %s ]\n" "${folder#./}" "${tags:-no tags}"
+                    printf "📁 %-40s [ %s ]\n" "${folder#./}" "${tags:-no tags}"
                 fi
             done
             ;;
 
-        list-tags )
-            # ------------------- LIST TAGS MODE -------------------
-            local target="${1:-.}"          # default to current directory if no argument
-
+        # LIST TAGS MODE
+        list-tags)
+            local target="${1:-}"          # Default to current directory if no path given
             if [[ ! -d "$target" ]]; then
                 echo "Error: '$target' is not a directory" >&2
                 exit 1
             fi
-
             local tags=$(get_tags "$target")
             if [[ -n "$tags" ]]; then
-                echo "Tags for '$(realpath "$target")':"
-                echo "$tags" | sed 's/^/   • /'
+                echo "Tags in '$(realpath "$target")':"
+                echo "$tags"
             else
                 echo "No tags found for '$(realpath "$target")'."
             fi
             ;;
 
-        help|--help|-h )
+        help|--help|-h)
             usage
             ;;
 
-        * )
-            # ------------------- CONVENIENCE MODE -------------------
-            # First argument was not a command → treat it as folder name
-            local folder_name="$cmd"
-            shift || true
-
+        # ------------------- CONVENIENCE MODE (default) -------------------
+        # User typed: tdir my-folder tag1 tag2 ...
+        *)
+            local folder_name="$cmd"   # First argument becomes folder name
+            # All remaining arguments become tags (no extra shift)
             mkdir -p "$folder_name"
-            echo "✓ Directory created: $(pwd)/$folder_name"
-
-            if [[ $# -gt 0 ]]; then
-                save_tags "$folder_name" "$@"
-            fi
+            echo "✓ Directory created: $(realpath "$folder_name")"
+            save_tags "$folder_name" "$@"
             ;;
     esac
 }
 
-# ===================== EXECUTE =====================
+# ===================== START EXECUTION =====================
 main "$@"
