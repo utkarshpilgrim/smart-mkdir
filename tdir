@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+
+# =============================================================================
+# tdir - Smart Tagged Directory Creator & Searcher for macOS
+# Usage:
+#   tdir <folder-name> [tag1 tag2 tag3 ...]
+#   tdir create <folder-name> [tags...]
+#   tdir search <tag1> [tag2 ...]
+#   tdir list-tags <path>
+# =============================================================================
+
+set -euo pipefail
+
+# CONFIGURATION
+TAG_FILE=".tags"
+SEARCH_DEPTH=5
+
+# HELPER FUNCTION
+usage() {
+    cat <<EOF
+Usage: 
+    tdir <folder-name> [tag1, tag2 ...]  # Create folder and add tags
+    tdir create <folder-name> [tag1, tag2 ...] 
+    tdir search tag1 [tag2 ..]  # Search by tags
+    tdir list-tags [path]  # List tags of a folder
+    tdir help
+EOF
+
+    exit 1
+}
+
+# Save tags to .tag files (one tag per line)
+save_tags() {
+    local dir="$1"
+    shift
+    local tags=("$@")
+
+    if [[ ${#tags[@]} -eq 0 ]]; then
+        return
+    fi
+
+    # Create .tags file with one tag per line
+    printf "%s\n" "${tags[@]}" | sort -u > "${dir}/${TAG_FILE}"
+    echo "🏁 Tags saved: ${tags[*]}" >&2
+}
+
+# Read tags from the folder
+get_tags() {
+    local dir="$1"
+    if [[ -f "${dir}/${TAG_FILE}" ]]; then
+        cat "${dir}/${TAG_FILE}"
+    else
+        echo ""
+    fi
+}
+
+# MAIN LOGIC
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        usage
+    fi
+
+    local cmd="${1:-}"
+    shift || true
+
+    case "$cmd" in
+        create|"" )
+            if [[ $# -eq 0 ]]; then
+                usage
+            fi 
+
+            local folder_name="$1"
+            shift
+
+            # Create the directory
+            if mkdir -p "$folder_name"; then
+                echo "🏁 Directory created: $(pwd)/$folder_name"
+            else
+                echo "🤡 Failed to create directory" >&2
+                exit
+            fi
+
+            # Save tags if any were provided
+            if [[ $# -gt 0 ]]; then
+                save_tags "$folder_name" "$@"
+            fi
+            ;;
+        search )
+            if [[ $# -eq 0 ]]; then
+                echo "Error: Provide at least one tag to search"
+                usage
+            fi
+
+            echo "Searching for folders with tags: $* ..." >&2
+            echo "---------------------------------------"
+
+            # Use find + grep to search for .tags files containing any of the tags
+
+            find . -maxdepth "$SEARCH_DEPTH"  -name "$TAG_FILE"-type f 2>/dev/null | while read -r tagfile; do
+                local folder="${tagfile%/*}" 
+                local matched=false
+
+                for tag in "$@"; do
+                    if grep -qixf "$tag" "$tagfile"; then
+                        matched=true
+                        break
+                    fi
+                done
+
+                if [[ "$matched" == true ]]; then
+                    local tags=$(get_tags "$folder" | tr '\n' ' ')
+                    printf "📁 %s [ %s ]\n" "${folder#./}" "${tags:-no tags}"
+                fi
+            done
+            ;;
+
+        list-tags )
+            local target="${1:-}"
+            if [[ ! -d "$target" ]]; then
+                echo "Error: '$target' is not a directory" >&2
+                exit 1
+            fi
+
+            local tags=$(get_tags "$target")
+            if [[ -n "$tags" ]]; then
+                echo "Tags for '$(realpath "$targets")':"
+                echo "$tags" | sed 's/^/   • /'
+            else
+                echo "No tags found for this folder"
+            fi
+            ;;
+
+        help|--help|-h )
+            usage
+            ;;
+
+        * )
+            local folder_name="$cmd"
+            shift
+
+            mkdir -p "$folder_name" && echo "✓ Directory created: $(pwd)/$folder_name"
+
+            if [[ $# -gt 0 ]]; then
+                save_tags "$folder_name" "$@"
+            fi
+            ;;
+    esac
+}
+
+# EXECUTION
+main "$@"
